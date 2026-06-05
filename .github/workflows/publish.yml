@@ -1,15 +1,18 @@
 name: Publish
 
-# Push to main  → RC chart release  (chart version must contain a pre-release
-#                 suffix, e.g. 0.2.0-rc.1; chart-releaser marks the GitHub
-#                 Release as pre-release automatically)
-# Push a v* tag → Stable chart release (plain semver in Chart.yaml, e.g. 0.2.0)
+# Push to main  → RC chart release
+#   Chart version: X.Y.Z-rc.<run_number>  (taken from Chart.yaml base + run number)
+#   GitHub Release: marked as pre-release
+#   OCI: ghcr.io/nuvlabs/charts/pixflow:X.Y.Z-rc.<run_number>
 #
-# Convention:
-#   1. Bump Chart.yaml version to X.Y.Z-rc.N and merge to main → RC published.
-#   2. Bump Chart.yaml version to X.Y.Z and push tag vX.Y.Z    → Stable published.
+# Push a v* tag → Stable chart release
+#   Chart version: X.Y.Z  (plain semver from Chart.yaml)
+#   GitHub Release: marked as latest
+#   OCI: ghcr.io/nuvlabs/charts/pixflow:X.Y.Z
 #
-# Both paths run: lint gate → release (GitHub Pages) + oci (GHCR) in parallel.
+# Workflow automatically derives the version — keep Chart.yaml at plain X.Y.Z
+# (e.g. 0.1.0). The RC suffix is injected at publish time; no manual bumping
+# of Chart.yaml is needed for RC builds.
 on:
   push:
     branches:
@@ -62,22 +65,6 @@ jobs:
             helm lint "$chart" --strict
           done
 
-      - name: Validate chart versions are semver
-        run: |
-          for chart in charts/*/; do
-            version=$(helm show chart "$chart" | grep '^version:' | awk '{print $2}')
-            # Accept plain semver (1.2.3) and pre-release semver (1.2.3-rc.1).
-            if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-              echo "ERROR: $chart version '$version' is not a valid semver"
-              exit 1
-            fi
-            if echo "$version" | grep -q '-'; then
-              echo "RC: $(basename $chart) $version"
-            else
-              echo "✓  $(basename $chart) $version (stable)"
-            fi
-          done
-
       - name: Render templates (smoke-test with default values)
         run: |
           for chart in charts/*/; do
@@ -90,15 +77,15 @@ jobs:
           done
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Release — publish to GitHub Pages Helm repository.
-  # chart-releaser detects charts with bumped versions, creates GitHub
-  # Releases (marking pre-release versions automatically), and regenerates
-  # index.yaml on the gh-pages branch.
+  # Release — publish to GitHub Pages Helm repository via chart-releaser.
   #
-  # Users install with:
-  #   helm repo add nuvlabs https://nuvlabs.github.io/helm-charts
-  #   helm install pixflow nuvlabs/pixflow                       # stable
-  #   helm install pixflow nuvlabs/pixflow --devel               # include RC
+  # Version strategy:
+  #   main push → X.Y.Z-rc.<run_number>   (pre-release, --devel needed to install)
+  #   tag push  → X.Y.Z                   (stable, default helm search/install)
+  #
+  # Chart.yaml always holds the plain X.Y.Z base; the RC suffix is injected
+  # into a working copy of Chart.yaml before cr runs so the repo always stays
+  # clean.
   # ──────────────────────────────────────────────────────────────────────────
   release:
     name: ${{ startsWith(github.ref, 'refs/tags/v') && 'Release (stable)' || 'Release (RC)' }}
@@ -118,6 +105,25 @@ jobs:
         run: |
           git config user.name  "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Compute chart version
+        id: ver
+        run: |
+          base=$(grep '^version:' charts/pixflow/Chart.yaml | awk '{print $2}' | sed 's/-.*//')
+          if [[ "${{ github.ref }}" == refs/heads/main ]]; then
+            version="${base}-rc.${{ github.run_number }}"
+          else
+            version="${base}"
+          fi
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          echo "Chart version: ${version}"
+
+      - name: Stamp version into Chart.yaml
+        run: |
+          for chart in charts/*/; do
+            sed -i "s/^version: .*/version: ${{ steps.ver.outputs.version }}/" "${chart}Chart.yaml"
+            echo "$(basename $chart) → ${{ steps.ver.outputs.version }}"
+          done
 
       - name: Bootstrap gh-pages branch
         # chart-releaser requires the gh-pages branch to exist before its first
@@ -143,27 +149,33 @@ jobs:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           charts_dir: charts
-          # On stable releases (tag push), mark the GitHub Release as latest.
-          # On RC releases (main push), leave it as pre-release (cr does this
-          # automatically when the chart version contains a pre-release suffix).
+          # Stable tag push → mark as latest. RC main push → pre-release
+          # (chart-releaser sets pre-release automatically for versions with a
+          # pre-release suffix like -rc.N).
           mark_as_latest: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Summary
         if: always()
         run: |
-          echo "## Helm Repository" >> $GITHUB_STEP_SUMMARY
+          echo "## Helm Repository — ${{ steps.ver.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "helm repo add nuvlabs https://nuvlabs.github.io/helm-charts" >> $GITHUB_STEP_SUMMARY
           echo "helm repo update" >> $GITHUB_STEP_SUMMARY
-          echo "helm search repo nuvlabs          # stable only" >> $GITHUB_STEP_SUMMARY
-          echo "helm search repo nuvlabs --devel  # include RC" >> $GITHUB_STEP_SUMMARY
+          echo "# Stable" >> $GITHUB_STEP_SUMMARY
+          echo "helm install pixflow nuvlabs/pixflow --version ${{ steps.ver.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "# RC" >> $GITHUB_STEP_SUMMARY
+          echo "helm install pixflow nuvlabs/pixflow --version ${{ steps.ver.outputs.version }} --devel" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────────────────────────────────
   # OCI — push charts to GHCR as OCI artifacts (alternative install method).
+  #
+  # Uses the same version strategy as the release job: RC suffix injected via
+  # `helm package --version` so Chart.yaml stays at plain X.Y.Z.
+  #
   # Users install with:
-  #   helm install pixflow oci://ghcr.io/nuvlabs/helm-charts/pixflow --version 0.1.0
+  #   helm install pixflow oci://ghcr.io/nuvlabs/charts/pixflow --version 0.1.0-rc.5
   # ──────────────────────────────────────────────────────────────────────────
   oci:
     name: Push to OCI Registry (GHCR)
@@ -180,6 +192,18 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
+      - name: Compute chart version
+        id: ver
+        run: |
+          base=$(grep '^version:' charts/pixflow/Chart.yaml | awk '{print $2}' | sed 's/-.*//')
+          if [[ "${{ github.ref }}" == refs/heads/main ]]; then
+            version="${base}-rc.${{ github.run_number }}"
+          else
+            version="${base}"
+          fi
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          echo "Chart version: ${version}"
+
       - name: Log in to GHCR
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
@@ -188,29 +212,27 @@ jobs:
       - name: Package and push all charts
         run: |
           mkdir -p /tmp/helm-packages
+          version="${{ steps.ver.outputs.version }}"
           for chart in charts/*/; do
             name=$(basename "$chart")
-            version=$(helm show chart "$chart" | grep '^version:' | awk '{print $2}')
-            echo "──── Packaging $name@$version ────"
-            helm package "$chart" -d /tmp/helm-packages
+            echo "──── Packaging $name@${version} ────"
+            helm package "$chart" --version "${version}" -d /tmp/helm-packages
             pkg="/tmp/helm-packages/${name}-${version}.tgz"
-            echo "Pushing $pkg → oci://${{ env.OCI_REGISTRY }}/$name"
+            echo "Pushing → oci://${{ env.OCI_REGISTRY }}"
             helm push "$pkg" "oci://${{ env.OCI_REGISTRY }}"
-            echo "✓ $name@$version pushed"
+            echo "✓ $name@${version} pushed"
           done
 
       - name: Summary
         if: always()
         run: |
-          echo "## OCI Registry" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Charts available at \`oci://${{ env.OCI_REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
+          version="${{ steps.ver.outputs.version }}"
+          echo "## OCI Registry — ${version}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           for chart in charts/*/; do
             name=$(basename "$chart")
-            version=$(helm show chart "$chart" | grep '^version:' | awk '{print $2}')
-            echo "### \`$name@$version\`" >> $GITHUB_STEP_SUMMARY
+            echo "### \`${name}@${version}\`" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
-            echo "helm install $name oci://ghcr.io/nuvlabs/helm-charts/$name --version $version" >> $GITHUB_STEP_SUMMARY
+            echo "helm install ${name} oci://ghcr.io/nuvlabs/charts/${name} --version ${version}" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           done
