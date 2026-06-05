@@ -28,7 +28,7 @@ on:
         type: boolean
 
 env:
-  OCI_REGISTRY: ghcr.io/nuvlabs/helm-charts
+  OCI_REGISTRY: ghcr.io/nuvlabs/charts
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
