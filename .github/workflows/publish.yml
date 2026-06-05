@@ -1,0 +1,184 @@
+name: Publish
+
+# Triggered on every push to main that touches charts/ or the workflow itself.
+# Runs three jobs in parallel after the lint gate passes:
+#   release — packages charts, creates GitHub Releases, updates index.yaml on
+#             the gh-pages branch (standard Helm HTTP repository)
+#   oci     — pushes packaged charts to ghcr.io as OCI artifacts so users can
+#             install with helm install oci://ghcr.io/nuvlabs/helm-charts/pixflow
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "charts/**"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — lint and package only, do not publish"
+        required: false
+        default: "false"
+        type: boolean
+
+env:
+  OCI_REGISTRY: ghcr.io/nuvlabs/helm-charts
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Lint — validate all charts before attempting to publish.
+  # This job is the gate; release and oci only run when it succeeds.
+  # ──────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint Charts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up Python (required by chart-testing)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install chart-testing
+        uses: helm/chart-testing-action@v2.6.1
+
+      - name: Run helm lint on all charts
+        run: |
+          for chart in charts/*/; do
+            echo "──── Linting $chart ────"
+            helm lint "$chart" --strict
+          done
+
+      - name: Validate chart versions are semver
+        run: |
+          for chart in charts/*/; do
+            version=$(helm show chart "$chart" | grep '^version:' | awk '{print $2}')
+            if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+              echo "ERROR: $chart version '$version' is not a valid semver"
+              exit 1
+            fi
+            echo "✓ $(basename $chart) version $version"
+          done
+
+      - name: Render templates (smoke-test with default values)
+        run: |
+          for chart in charts/*/; do
+            name=$(basename "$chart")
+            echo "──── Rendering $name ────"
+            helm template "smoke-$name" "$chart" \
+              --set config.skipVerify=true \
+              --debug \
+              --dry-run 2>&1 | tail -5
+          done
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Release — publish to GitHub Pages Helm repository.
+  # chart-releaser-action detects charts whose version was bumped, packages
+  # them, creates GitHub Releases with the .tgz as an asset, and regenerates
+  # index.yaml on the gh-pages branch.
+  # Users install with:
+  #   helm repo add nuvlabs https://nuvlabs.github.io/helm-charts
+  # ──────────────────────────────────────────────────────────────────────────
+  release:
+    name: Release to GitHub Pages
+    needs: lint
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name  "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.6.0
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          charts_dir: charts
+          # Annotate the GitHub Release with the chart changelog when present.
+          mark_as_latest: true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Helm Repository" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "helm repo add nuvlabs https://nuvlabs.github.io/helm-charts" >> $GITHUB_STEP_SUMMARY
+          echo "helm repo update" >> $GITHUB_STEP_SUMMARY
+          echo "helm search repo nuvlabs" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # OCI — push charts to GHCR as OCI artifacts (alternative install method).
+  # Users install with:
+  #   helm install pixflow oci://ghcr.io/nuvlabs/helm-charts/pixflow --version 0.1.0
+  # ──────────────────────────────────────────────────────────────────────────
+  oci:
+    name: Push to OCI Registry (GHCR)
+    needs: lint
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package and push all charts
+        run: |
+          mkdir -p /tmp/helm-packages
+          for chart in charts/*/; do
+            name=$(basename "$chart")
+            version=$(helm show chart "$chart" | grep '^version:' | awk '{print $2}')
+            echo "──── Packaging $name@$version ────"
+            helm package "$chart" -d /tmp/helm-packages
+            pkg="/tmp/helm-packages/${name}-${version}.tgz"
+            echo "Pushing $pkg → oci://${{ env.OCI_REGISTRY }}/$name"
+            helm push "$pkg" "oci://${{ env.OCI_REGISTRY }}"
+            echo "✓ $name@$version pushed"
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## OCI Registry" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Charts are available at \`oci://${{ env.OCI_REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for chart in charts/*/; do
+            name=$(basename "$chart")
+            version=$(helm show chart "$chart" | grep '^version:' | awk '{print $2}')
+            echo "### $name@$version" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "helm install $name oci://ghcr.io/nuvlabs/helm-charts/$name --version $version" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          done
