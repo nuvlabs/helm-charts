@@ -94,7 +94,7 @@ spec:
             - name: PIXFLOW_WATERMARK_PATH
               value: {{ .Values.config.watermarkPath | quote }}
             {{- end }}
-            {{- with .Values.extraEnv }}
+            {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
@@ -109,7 +109,7 @@ spec:
               mountPath: {{ .Values.persistence.mountPath }}
               readOnly: true
             {{- end }}
-            {{- with .Values.extraVolumeMounts }}
+            {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
@@ -118,7 +118,7 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (include "pixflow.fullname" .) }}
         {{- end }}
-        {{- with .Values.extraVolumes }}
+        {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
