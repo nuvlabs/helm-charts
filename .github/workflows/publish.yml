@@ -105,6 +105,21 @@ jobs:
           git config user.name  "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
+      - name: Bootstrap gh-pages branch
+        # chart-releaser requires the gh-pages branch to exist before its first
+        # run. Create it as an empty orphan branch if it is absent so the action
+        # succeeds on the very first push to main.
+        run: |
+          git fetch origin gh-pages 2>/dev/null && echo "gh-pages exists" && exit 0
+          git checkout --orphan gh-pages
+          git rm -rf . > /dev/null
+          echo "apiVersion: v1" > index.yaml
+          echo "entries: {}" >> index.yaml
+          git add index.yaml
+          git commit -m "chore: initialise Helm repository index"
+          git push origin gh-pages
+          git checkout main
+
       - name: Install Helm
         uses: azure/setup-helm@v4
 
