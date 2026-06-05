@@ -1,0 +1,24 @@
+apiVersion: v2
+name: pixflow
+description: >
+  Self-hosted, open-source image and video processing service.
+  Resize, crop, convert, watermark, and stream media via a simple HTTP API.
+  Powered by libvips and ffmpeg.
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - image
+  - video
+  - processing
+  - resize
+  - thumbnail
+  - libvips
+  - ffmpeg
+  - media
+home: https://github.com/nuvlabs/pixflow
+sources:
+  - https://github.com/nuvlabs/pixflow
+maintainers:
+  - name: nuvlabs
+    url: https://github.com/nuvlabs

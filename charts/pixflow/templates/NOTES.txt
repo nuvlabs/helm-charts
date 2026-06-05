@@ -1,0 +1,30 @@
+pixflow is deployed in the {{ .Release.Namespace }} namespace.
+
+Cluster-internal endpoint:
+  {{ include "pixflow.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+To verify the service is healthy, forward the port and hit /health:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "pixflow.fullname" . }} {{ .Values.service.port }}
+  curl http://<host>:{{ .Values.service.port }}/health
+
+Other useful endpoints (after port-forwarding):
+  Sandbox UI  →  http://<host>:{{ .Values.service.port }}/sandbox
+  Metrics     →  http://<host>:{{ .Values.service.port }}/metrics
+  OpenAPI     →  http://<host>:{{ .Values.service.port }}/openapi.json
+
+{{- if .Values.config.skipVerify }}
+
+WARNING: PIXFLOW_SKIP_VERIFY is enabled — HMAC signature verification is OFF.
+         This must not be used in production.
+{{- end }}
+{{- if and (not .Values.config.signingKey) (not .Values.existingSecret) }}
+
+NOTE: No signing key is configured. The signed URL API (POST /sign and the
+      /{sig}/…/plain/{source} route) will reject all requests until
+      config.signingKey + config.signingSalt are set, or existingSecret is
+      pointed at a pre-existing Kubernetes Secret containing those values.
+{{- end }}
+
+Documentation:  https://github.com/nuvlabs/pixflow
+Chart source:   https://github.com/nuvlabs/helm-charts

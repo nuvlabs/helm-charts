@@ -1,0 +1,39 @@
+name: Release Charts
+
+# Publishes any chart whose version has been bumped in Chart.yaml.
+# Packages the chart, creates a GitHub Release, and pushes the updated
+# index.yaml to the gh-pages branch (standard Helm HTTP repository).
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create GitHub Releases and push to gh-pages
+      packages: write   # not strictly required but kept for consistency
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # chart-releaser needs full history to diff versions
+
+      - name: Configure Git
+        run: |
+          git config user.name  "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.6.0
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Store packaged charts in .cr-release-packages/ (gitignored).
+          # chart-releaser-action uploads them as GitHub Release assets and
+          # regenerates index.yaml on the gh-pages branch automatically.
+          charts_dir: charts

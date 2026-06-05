@@ -1,0 +1,245 @@
+# Default values for pixflow.
+# Full documentation: https://github.com/nuvlabs/pixflow
+
+# -- Number of replicas. Increase for high-availability deployments.
+# Ignored when autoscaling.enabled is true.
+replicaCount: 2
+
+image:
+  # -- OCI image repository.
+  repository: ghcr.io/nuvlabs/pixflow
+  # -- Image pull policy. Use Always in development; IfNotPresent in production.
+  pullPolicy: IfNotPresent
+  # -- Image tag. Defaults to the chart's appVersion when left empty.
+  # Pin to a specific release tag (e.g. "v0.2.0") in production.
+  tag: ""
+
+# -- Secrets needed to pull from a private registry.
+# Example: [{name: ghcr-credentials}]
+imagePullSecrets: []
+
+# -- Override the chart name component used in generated resource names.
+nameOverride: ""
+# -- Override the fully-qualified resource name prefix.
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a dedicated ServiceAccount for the pixflow pods.
+  # Set to false to use the namespace default ServiceAccount.
+  create: true
+  # -- Annotations added to the ServiceAccount.
+  # Useful for IRSA (AWS), Workload Identity (GCP), or similar IAM binding.
+  # Example: {"eks.amazonaws.com/role-arn": "arn:aws:iam::123456789:role/pixflow"}
+  annotations: {}
+  # -- Override the generated ServiceAccount name.
+  name: ""
+
+# -- Annotations added to every Pod.
+podAnnotations: {}
+# -- Extra labels added to every Pod.
+podLabels: {}
+
+# -- Pod-level security context.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# -- Container-level security context.
+# readOnlyRootFilesystem is intentionally omitted: ffmpeg writes temp files
+# to /tmp during video processing.
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+# ─────────────────────────────────────────────────────────────────────────────
+# pixflow configuration
+#
+# Sensitive values (signingKey, signingSalt, apiKey) are written into a
+# Kubernetes Secret by this chart. For GitOps workflows or secret management
+# systems (External Secrets Operator, HashiCorp Vault, Sealed Secrets), set
+# existingSecret instead — the chart will reference that Secret and will NOT
+# create its own.
+# ─────────────────────────────────────────────────────────────────────────────
+config:
+  # -- Hex-encoded HMAC-SHA256 signing key.
+  # Required unless skipVerify is true. Generate with: openssl rand -hex 32
+  signingKey: ""
+  # -- Hex-encoded HMAC-SHA256 signing salt.
+  # Required unless skipVerify is true. Generate with: openssl rand -hex 32
+  signingSalt: ""
+
+  # -- Absolute path inside the container where local:// source URIs resolve.
+  # Mount your media PersistentVolumeClaim at this path (see persistence.*).
+  localRoot: /images
+
+  # -- Disable HMAC signature verification.
+  # NEVER enable in production — use only for local development.
+  skipVerify: false
+
+  # -- Reject any source image whose width or height exceeds this many pixels.
+  # Prevents resource exhaustion from abnormally large inputs.
+  maxDimension: 10000
+
+  # -- Maximum number of images or video frames processed concurrently.
+  # Tune based on available CPU cores and memory headroom.
+  maxConcurrent: 10
+
+  # -- LRU response cache capacity (number of entries).
+  # Set to 0 to disable the in-process cache.
+  cacheSize: 500
+
+  # -- Per-IP token-bucket rate limit in requests per second.
+  # Set to 0 to disable rate limiting.
+  rateLimit: 0
+
+  # -- Token-bucket burst capacity. When 0, defaults to rateLimit (no burst).
+  rateBurst: 0
+
+  # -- Comma-separated list of hostnames permitted for remote src= parameters.
+  # Leave empty to allow any remote host. Set for public-facing deployments to
+  # prevent pixflow from being used as an open proxy.
+  # Example: "cdn.example.com,assets.acme.io"
+  allowedHosts: ""
+
+  # -- Optional API key that callers must supply via X-Api-Key header or ?key=
+  # query parameter when using the simple REST API (/img, /thumb, /sprite, etc.).
+  # Leave empty to accept unauthenticated requests.
+  apiKey: ""
+
+  # -- Absolute path inside the container to the watermark overlay image.
+  # Leave empty to disable watermarking globally.
+  watermarkPath: ""
+
+# -- Name of a pre-existing Kubernetes Secret that holds signing credentials.
+# When set, this chart does NOT create a Secret. Use this with External Secrets
+# Operator, HashiCorp Vault Agent, or any other external secret injector.
+# The referenced Secret must contain the keys defined in existingSecretKeys.
+existingSecret: ""
+
+# -- Key names inside the chart-managed or external Secret.
+# Override these when your existing Secret uses different key names.
+existingSecretKeys:
+  signingKey: PIXFLOW_KEY
+  signingSalt: PIXFLOW_SALT
+  apiKey: PIXFLOW_API_KEY
+
+service:
+  # -- Kubernetes Service type.
+  # ClusterIP is strongly recommended — pixflow is an internal service and
+  # should not be exposed to the internet directly. Use an Ingress or API
+  # gateway in front of it if you need external access.
+  type: ClusterIP
+  # -- Port the Service and container listen on.
+  port: 8089
+
+# -- CPU and memory resource requests and limits.
+# libvips holds decoded images in memory; increase the memory limit when
+# processing large images or running many concurrent workers.
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 2000m
+    memory: 1Gi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Media volume
+# Mount a PersistentVolumeClaim at config.localRoot so that local:// source
+# URIs resolve to files on shared storage.
+# ─────────────────────────────────────────────────────────────────────────────
+persistence:
+  # -- Enable the media volume mount.
+  enabled: false
+  # -- Reference an existing PVC instead of creating one.
+  existingClaim: ""
+  # -- StorageClass for the auto-created PVC. Empty string = cluster default.
+  storageClass: ""
+  # -- Access mode. ReadOnlyMany allows multiple replicas to share the volume.
+  accessMode: ReadOnlyMany
+  # -- Size of the auto-created PVC.
+  size: 10Gi
+  # -- Mount path inside the container. Must match config.localRoot.
+  mountPath: /images
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Horizontal Pod Autoscaler
+# Requires the Kubernetes Metrics Server to be installed in the cluster.
+# ─────────────────────────────────────────────────────────────────────────────
+autoscaling:
+  # -- Enable HPA. When true, replicaCount is ignored.
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  # -- Target CPU utilisation percentage across all pods. Omit to scale on
+  # memory only.
+  targetCPUUtilizationPercentage: 70
+  # -- Target memory utilisation percentage across all pods. Omit to scale on
+  # CPU only.
+  targetMemoryUtilizationPercentage: 80
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pod Disruption Budget
+# Prevents Kubernetes from evicting all pods simultaneously during voluntary
+# disruptions (node drains, cluster upgrades). Enable for production.
+# ─────────────────────────────────────────────────────────────────────────────
+podDisruptionBudget:
+  # -- Enable the PodDisruptionBudget. Recommended when replicaCount > 1.
+  enabled: false
+  # -- Minimum number of pods that must remain available during a disruption.
+  # Use minAvailable OR maxUnavailable — not both.
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health probes
+# ─────────────────────────────────────────────────────────────────────────────
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scheduling
+# ─────────────────────────────────────────────────────────────────────────────
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -- Additional environment variables injected verbatim into the container.
+# Use for AWS credentials, HTTP proxy settings, or any other env that pixflow
+# reads via os.Getenv.
+# Example:
+#   extraEnv:
+#     - name: AWS_REGION
+#       value: us-east-1
+#     - name: AWS_ACCESS_KEY_ID
+#       valueFrom:
+#         secretKeyRef:
+#           name: aws-creds
+#           key: access-key-id
+extraEnv: []
+
+# -- Additional volumes added to the Pod spec.
+extraVolumes: []
+
+# -- Additional volume mounts added to the pixflow container.
+extraVolumeMounts: []

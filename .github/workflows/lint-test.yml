@@ -1,0 +1,41 @@
+name: Lint and Test Charts
+
+# Runs on every pull request that touches the charts/ directory.
+# Uses helm/chart-testing to lint templates and validate values.
+on:
+  pull_request:
+    paths:
+      - "charts/**"
+      - "ct.yaml"
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up Python (required by chart-testing)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install chart-testing
+        uses: helm/chart-testing-action@v2.6.1
+
+      - name: Detect changed charts
+        id: list-changed
+        run: |
+          changed=$(ct list-changed --config ct.yaml --target-branch ${{ github.event.repository.default_branch }})
+          if [[ -n "$changed" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Lint changed charts
+        if: steps.list-changed.outputs.changed == 'true'
+        run: ct lint --config ct.yaml --target-branch ${{ github.event.repository.default_branch }}

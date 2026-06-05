@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pixflow.fullname" . }}
+  labels:
+    {{- include "pixflow.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pixflow.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if not .Values.existingSecret }}
+        # Roll pods automatically when the chart-managed Secret changes so
+        # credential rotations take effect without a manual restart.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "pixflow.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "pixflow.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: pixflow
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            # ── Secrets (from Kubernetes Secret) ─────────────────────
+            - name: PIXFLOW_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pixflow.secretName" . }}
+                  key: {{ .Values.existingSecretKeys.signingKey }}
+                  optional: true
+            - name: PIXFLOW_SALT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pixflow.secretName" . }}
+                  key: {{ .Values.existingSecretKeys.signingSalt }}
+                  optional: true
+            - name: PIXFLOW_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pixflow.secretName" . }}
+                  key: {{ .Values.existingSecretKeys.apiKey }}
+                  optional: true
+            # ── Non-sensitive config (plain env) ──────────────────────
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: PIXFLOW_LOCAL_ROOT
+              value: {{ .Values.config.localRoot | quote }}
+            - name: PIXFLOW_SKIP_VERIFY
+              value: {{ .Values.config.skipVerify | quote }}
+            - name: PIXFLOW_MAX_DIMENSION
+              value: {{ .Values.config.maxDimension | quote }}
+            - name: PIXFLOW_MAX_CONCURRENT
+              value: {{ .Values.config.maxConcurrent | quote }}
+            - name: PIXFLOW_CACHE_SIZE
+              value: {{ .Values.config.cacheSize | quote }}
+            {{- if gt (int .Values.config.rateLimit) 0 }}
+            - name: PIXFLOW_RATE_LIMIT
+              value: {{ .Values.config.rateLimit | quote }}
+            {{- end }}
+            {{- if gt (int .Values.config.rateBurst) 0 }}
+            - name: PIXFLOW_RATE_BURST
+              value: {{ .Values.config.rateBurst | quote }}
+            {{- end }}
+            {{- if .Values.config.allowedHosts }}
+            - name: PIXFLOW_ALLOWED_HOSTS
+              value: {{ .Values.config.allowedHosts | quote }}
+            {{- end }}
+            {{- if .Values.config.watermarkPath }}
+            - name: PIXFLOW_WATERMARK_PATH
+              value: {{ .Values.config.watermarkPath | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: media
+              mountPath: {{ .Values.persistence.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: media
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "pixflow.fullname" .) }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
