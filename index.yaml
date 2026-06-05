@@ -1,2 +1,31 @@
 apiVersion: v1
-entries: {}
+entries:
+  pixflow:
+  - apiVersion: v2
+    appVersion: latest
+    created: "2026-06-05T09:22:40.472505328Z"
+    description: 'Self-hosted, open-source image and video processing service. Resize,
+      crop, convert, watermark, and stream media via a simple HTTP API. Powered by
+      libvips and ffmpeg. '
+    digest: e94c1eec521e1dd7e8297c0c4ba9df22da73d36978ea57ecefbe1aa8179d1c75
+    home: https://github.com/nuvlabs/pixflow
+    keywords:
+    - image
+    - video
+    - processing
+    - resize
+    - thumbnail
+    - libvips
+    - ffmpeg
+    - media
+    maintainers:
+    - name: nuvlabs
+      url: https://github.com/nuvlabs
+    name: pixflow
+    sources:
+    - https://github.com/nuvlabs/pixflow
+    type: application
+    urls:
+    - https://github.com/nuvlabs/helm-charts/releases/download/pixflow-0.1.0-rc.6/pixflow-0.1.0-rc.6.tgz
+    version: 0.1.0-rc.6
+generated: "2026-06-05T09:22:40.47252639Z"
